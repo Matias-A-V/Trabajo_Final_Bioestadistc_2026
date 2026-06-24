@@ -1,0 +1,627 @@
+---
+title: "Informe Final Vergara"
+author: "Matias A. Vergara"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+# Sistema de estudio
+
+Para este trabajo, se generó un conjunto de datos simulados que recrea un diseño de muestreo en el Parque Nacional Nahuelbuta, un sistema de bosque lluvioso de alta montaña dominado por Nothofagus pumilio. El objetivo de este estudio es evaluar si el muérdago *Desmaria mutabilis* desencadena una cascada de facilitación multitrófica sobre las comunidades de artrópodos epígeos y aves insectívoras en este sistema. La hipótesis propone que la presencia de *D. mutabilis* incrementa la diversidad en las comunidades de artrópodos epígeos, y que este aumento en la diversidad actúa como mediador del incremento en la diversidad de aves insectívoras. El diseño contempla 30 parcelas divididas equitativamente: 15 árboles con presencia de *D. mutabilis* y 15 árboles sin muérdago. La pregunta que guía este análisis es: ¿La presencia de *Desmaria mutabilis* desencadena una cascada de facilitación multitrófica sobre la composición y diversidad de las comunidades de artrópodos epígeos y aves insectívoras en un bosque de alta montaña de Nothofagus pumilio del Parque Nacional Nahuelbuta?
+
+
+```{r Generación de matriz de datos}
+library(vegan)
+
+set.seed(42)
+n_plots <- 30
+desmaria <- c(rep(1, 15), rep(0, 15)) # Presencia binaria
+
+# Funcion auxiliar para hacer el cálculo de diversidad para que la diversidad de aves se haga en función de la de artrópodos.
+
+shannon_H <- function(counts) {
+  counts <- counts[counts > 0]
+  if (length(counts) == 0) return(0)
+  p <- counts / sum(counts)
+  -sum(p * log(p))}
+
+# Bajo árboles con *D. mutabilis* los subsidios de materia orgánica al suelo deberian sostener una comunidad de artrópodos más diversa.
+
+gen_artr <- function(desmaria_val) {
+  if (desmaria_val == 1) {
+    # Con muérdago: comunidad diversa y relativamente equitativa
+    c(
+      rnbinom(1, mu = 8,  size = 1.2),   # spar01 
+      rpois(1, lambda = 6),              # spar02
+      rpois(1, lambda = 5),              # spar03
+      rpois(1, lambda = 4),              # spar04
+      rpois(1, lambda = 4),              # spar05
+      rpois(1, lambda = 3),              # spar06
+      rpois(1, lambda = 2),              # spar07
+      rpois(1, lambda = 2),              # spar08
+      rpois(1, lambda = 1),              # spar09
+      rbinom(1, 1, 0.6),                 # spar10
+      rbinom(1, 1, 0.5),                 # spar11
+      rbinom(1, 1, 0.4)                  # spar12 
+    )
+  } else {
+    # Sin muérdago: el suelo recibe menor aporte de materia orgánica, sosteniendo una comunidad empobrecida y fuertemente dominada por 1-2 especies generalistas
+    c(
+      rpois(1, lambda = 9),   # spar01 
+      rpois(1, lambda = 3),   # spar02
+      rpois(1, lambda = 2),   # spar03
+      rbinom(1, 1, 0.4),      # spar04
+      rbinom(1, 1, 0.3),      # spar05
+      0, 0, 0, 0, 0, 0, 0     # spar06-12 
+    )}}
+
+# Generamos la matriz de especies de aves donde los lambda de cada especie dependen del H' de los artrópodos
+gen_aves <- function(H_artr) {
+  
+  # Establecemos un rango de H' maximo y minimo 
+  H_min <- 0.5
+  H_max <- 2.2
+  
+  # Conectamos la diversidad de artropodos con la de aves, si la parcela tiene poca diversidad de insectos, f = 0 (escenario pobre) y si tiene harta diversidad f = 1 (escenario rico)
+  f <- min(max((H_artr - H_min) / (H_max - H_min), 0), 1)
+
+  c(
+    # spav01 
+    rnbinom(1, mu = 3 + 4 * f, size = 1.5),
+
+    # spav02 
+    rnbinom(1, mu = 1 + 4 * f, size = 1),
+
+    # spav03 
+    rpois(1, lambda = max(0, -1 + 4 * f)),
+
+    # spav04 
+    rpois(1, lambda = max(0, -1.5 + 4.5 * f)),
+
+    # spav05 
+    rpois(1, lambda = max(0, -2 + 5 * f)),
+
+    # spav06
+    rpois(1, lambda = max(0, -2.5 + 5 * f)),
+
+    # spav07 
+    rpois(1, lambda = max(0, -1 + 2 * f)),
+
+    # spav08 
+    rpois(1, lambda = max(0, -1.2 + 2.2 * f)),
+
+    # spav09
+    rbinom(1, 1, prob = min(1, max(0, -0.3 + f))),
+
+    # spav10
+    rbinom(1, 1, prob = min(1, max(0, -0.5 + f)))
+  )
+}
+
+# Generamos la matriz de artropódos por parcela 
+artr_mat <- t(sapply(desmaria, gen_artr))
+
+colnames(artr_mat) <- paste0("spar0", 1:9) |>
+  (\(x) c(x, "spar10", "spar11", "spar12"))()
+
+# Calculamos H de artrópodos por cada parcela 
+H_artr_por_parcela <- apply(artr_mat, 1, shannon_H)
+
+# Generamos la matriz de aves usando H de artrópodos de cada parcela como fuente de la diversidad.   
+aves_mat <- t(sapply(H_artr_por_parcela, gen_aves))
+
+colnames(aves_mat) <- paste0("spav0", 1:10) |>
+  (\(x) { x[10] <- "spav10"; x })()
+
+# Finalmente construimos el data frame
+datos <- data.frame(
+  plot      = 1:n_plots,
+  desmaria  = desmaria,
+  aves_mat,
+  artr_mat
+)
+
+# Tratamiento como factor para posterior análisis 
+datos$desmaria <-factor (datos$desmaria, levels = c (0,1), labels = c("sin_desmaria", "con_desmaria"))
+
+# Podemos exportar los datos como csv si queremos con "write.csv(datos, "datos_comunidades_desmaria.csv", row.names = FALSE)" para asegurar la reproducibilidad de los datos crudos.
+
+# Lo dejo con # dado que no permite knitear con esto.
+```
+
+Una vez ya tenemos generada nuestra matriz de datos tiene sentido hacer una exploración descriptiva de la estructura básica de los datos. Calculamos la abundancia total acumulada y la riqueza observada por parcela para verificar que los rangos sean biológicamente congruentes con el sistema simulado (que no haya parcelas con abundancias nulas o riquezas imposibles). Esto constituye el análisis exploratorio de datos (AED) previo a cualquier inferencia.
+
+```{r datos}
+#Cargando los paquetes 
+library(mvabund)
+library(MASS)
+library(tidyverse)
+library(ggsci)
+library(DHARMa)
+library(patchwork)
+library(ggtext)
+
+#Abundancia acumuladas
+datos$abund_aves_tot   <- rowSums(aves_mat)
+datos$abund_artr_tot   <- rowSums(artr_mat)
+
+#Riqueza observada por cada parcela 
+datos$rich_aves  <- rowSums(aves_mat > 0)
+datos$rich_artr  <- rowSums(artr_mat > 0)
+
+summary (dplyr::select (datos, abund_aves_tot, abund_artr_tot, rich_aves, rich_artr))
+```
+No se observan anomalías evidentes al analizar los datos de abundancia acumulada y riqueza por parcela, parecen representar rangos biológicos congruentes. 
+
+Otra forma de explorar nuestros datos consiste en graficar las abundancias totales y describir su distribución entre las distintas especies de artrópodos y aves, lo que permite observar los patrones de dominancia presentes en cada comunidad, esto lo haremos mediante un grafico de barras.
+
+```{r Explorando dominancia de especies}
+
+# Transformamos los colSums directamente en Data Frames para ggplot
+df_artr_tot <- data.frame(
+  Especie    = names(colSums(artr_mat)), 
+  Abundancia = colSums(artr_mat)
+)
+
+df_aves_tot <- data.frame(
+  Especie    = names(colSums(aves_mat)), 
+  Abundancia = colSums(aves_mat)
+)
+
+# Gráfico A: Ensamble de artrópodos epígeos
+gg_artr_tot <- ggplot(df_artr_tot, aes(x = Especie, y = Abundancia)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "A) Abundancia total de Artrópodos epígeos", x = NULL, y = "Conteo total") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 10))
+
+# Gráfico B: Ensamble de aves insectívoras
+gg_aves_tot <- ggplot(df_aves_tot, aes(x = Especie, y = Abundancia)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "B) Abundancia total de Aves insectívoras", x = NULL, y = "Conteo total") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 10))
+
+# Combinamos con patchwork
+panel_abundancia_total <- gg_artr_tot + gg_aves_tot
+
+# Guardamos con ggsave
+ggsave(
+  filename = "Panel_Abundancia_Total.png",
+  plot     = panel_abundancia_total,
+  width    = 9.5, 
+  height   = 5.0, 
+  dpi      = 300
+)
+
+panel_abundancia_total
+```
+
+Al las graficas de ambas comunidades se nota un patrón claro, las primeras especies (spav01 y spar01) son las mas dominantes,aunque en la comunidad de artrópodos esta dominancia se ve más clara que en aves. 
+
+Ahora es pertinente describir la composición de las comunidades de artrópodos y aves en su totalidad, comparando con los casos de presencia y ausencia de *D. mutabilis*. Para ello, se utilizarán gráficos de barras apiladas que permitan contrastar la abundancia relativa de las especies que conforman cada comunidad en ambas condiciones.
+
+```{r Exploración de la composicion de las comunidades}
+# Composición de comunidad de artrópodos con y sin desmaria
+artr_long <- datos |>
+  pivot_longer(cols = starts_with("spar"),
+               names_to = "species",
+               values_to = "abund") |>
+  group_by(desmaria, species) |>
+  summarise(abund = sum(abund), .groups = "drop")
+
+stacked_artr <- ggplot(artr_long, aes(x = desmaria, y = abund, fill = species)) +
+  geom_bar(stat = "identity", position = "fill") +
+  labs(x = "Tratamiento",
+       y = "Proporción de la abundancia total",
+       title = "Composición de la comunidad de artrópodos") +
+  theme_minimal()
+
+# Composición de comunidad de aves con y sin desmaria
+aves_long <- datos |>
+  pivot_longer(cols = starts_with("spav"),
+               names_to = "species",
+               values_to = "abund") |>
+  group_by(desmaria, species) |>
+  summarise(abund = sum(abund), .groups = "drop")
+
+stacked_aves <- ggplot(aves_long, aes(x = desmaria, y = abund, fill = species)) +
+  geom_bar(stat = "identity", position = "fill") +
+  labs(x = "Tratamiento",
+       y = "Proporción de la abundancia total",
+       title = "Composición de la comunidad de aves") +
+  theme_minimal()
+
+# Creamos un panel para los graficos y lo guardamos
+panel_composicion <- (stacked_artr + stacked_aves) + 
+  plot_layout(guides = "collect") +            
+  plot_annotation(tag_levels = "A")           
+ggsave(
+  filename = "Panel_Composicion_Comunidades.png",
+  plot = panel_composicion,
+  width = 11, height = 7, dpi = 300
+)
+```
+
+Al observar los gráficos, se aprecia que las comunidades de artrópodos y aves en presencia de *D. mutabilis* parecen tener una mayor diversidad en comparación con aquellas donde la especie está ausente. En las parcelas sin *D. mutabilis*, se observa una menor cantidad de especies representadas por los colores y una mayor dominancia de unas pocas especies, representando una comunidad más "pobre" y con una estructura fuertemente dominada por una especie. En las parcelas con presencia de *D. mutabilis*, la comunidad muestra una mayor riqueza de especies, reflejada en la aparición de nuevos colores que representan las especies. Además, la dominancia de las especies spart01 y spave01 disminuye relativamente, representando una comunidad con una distribución más equitativa. 
+
+Pero esto es meramente descriptivo, aún tenemos que poner a prueba estadísticamente nuestras observaciones. Una excelente herramienta estadística es el paquete mvabund, a diferencia de PERMANOVA, nos permite conservar la identidad de cada especie. Esto permite analizar la estructura detallada del ensamble como paso previo y riguroso antes de utilizar métricas globales como índices de diversidad por parcela. Dado que los datos son conteos de abundancia de organismos se sugiere que nuestra distribución debería ser de Poisson.
+
+```{r Primer paso para hacer GLM mediante mvabund, evaluar la relación varianza-media}
+
+# Para saber que distribución utilizar en nuestro análisis primero debemos revisar la relación varianza-media.
+
+# Calculamos la varianza y media por grupo taxónomico
+# Artrópodos
+artr_means <- colMeans(artr_mat)
+artr_vars  <- apply(artr_mat, 2, var)
+
+# Aves
+aves_means <- colMeans(aves_mat)
+aves_vars  <- apply(aves_mat, 2, var)
+
+# Generamos un data frame para ggplot
+df_artr_mv <- data.frame(Media = artr_means, Varianza = artr_vars)
+df_aves_mv <- data.frame(Media = aves_means, Varianza = aves_vars)
+
+# Graficamos A: artrópodos 
+gg_artr_mv <- ggplot(df_artr_mv, aes(x = Media, y = Varianza)) +
+  geom_point(col = "steelblue", size = 3) +
+  geom_abline(intercept = 0, slope = 1, col = "red", linetype = "dashed", linewidth = 0.8) +
+  labs(title = "A) Ensamble de Artrópodos", x = "Media de la abundancia", y = "Varianza") +
+  theme_bw()
+
+# Graficamos B: Aves
+gg_aves_mv <- ggplot(df_aves_mv, aes(x = Media, y = Varianza)) +
+  geom_point(col = "steelblue", size = 3) +
+  geom_abline(intercept = 0, slope = 1, col = "red", linetype = "dashed", linewidth = 0.8) +
+  labs(title = "B) Ensamble de Aves", x = "Media de la abundancia", y = "Varianza") +
+  theme_bw()
+
+# Combinamos ambos gráficos en un panel
+panel_varianza_media <- gg_artr_mv + gg_aves_mv
+
+# Guardamos el panel 
+ggsave(
+  filename = "Panel_Varianza_Media.png",
+  plot     = panel_varianza_media,
+  width    = 9.5, 
+  height   = 4.8, 
+  dpi      = 300
+)
+panel_varianza_media
+```
+
+La línea segmentada roja representa el supuesto de Poisson, es decir, que la varianza es igual a la media, si observamos una mayor varianza que la media, entonces no podemos usar esta distribución. En ambos graficos observamos que los puntos azules que representan cada especie de artrópodo o de ave muestran sobredispersión, nuestro gráfico sugiere entonces utilizar una distribución Binomial negativa.
+
+Para confirmar este diagnóstico gráfico de sobredispersión, ajustamos modelos con ambas distribuciones candidatas (Poisson y Binomial negaitva) y comparamos su ajuste mdiante QQ-plots de residuos generados por mvabund. Los puntos deben alinearse sobre la diagnoal, una curva en "S" o desviaciones enn los extremos indican un mal ajuste del modelo.
+
+```{r selección de modelos}
+# Probando distribuciones poisson y binomial negativa
+modartr_poisson <- manyglm (artr_mat ~ desmaria, family = "poisson")
+modartr_negbin <- manyglm(artr_mat ~ desmaria, 
+                          data = datos, 
+                          family = "negative.binomial")
+op <- par (no.readonly = TRUE)
+# Graficando los residuales
+par(mfrow = c(1, 2))
+plot(modartr_poisson, which = 1:2)
+plot(modartr_negbin, which = 1:2) 
+
+# Probando distribuciones poisson y binomial negativa
+modaves_poisson <- manyglm (aves_mat ~ desmaria, data= datos, family = "poisson")
+modaves_negbin <- manyglm(aves_mat ~ desmaria, 
+                          data = datos, 
+                          family = "negative.binomial")
+op <- par (no.readonly = TRUE)
+# Graficando los residuales
+par(mfrow = c(1, 2))
+plot(modaves_poisson, which = 1:2)
+plot(modaves_negbin, which = 1:2) 
+
+```
+
+Podemos observar en el QQ-Plot de Poisson como nuestros puntos se escapan de los residuos simulados en los extremos, formando una curva en "S". En cambio en el QQ-Plot de Binomial Negativa, los puntos se alinean perfectamente con la recta. 
+
+Una vez validada la distribución Binomial Negativa como una distribución adecuada para los datos, podemos evaluar si la composición de las comunidades de artrópodos y aves difieren significativamente en presencia y ausencia de *D. mutabilis* mediante pruebas de razón de verosimilitud con permutaciones. 
+
+```{r modelos multivariados}
+mv_aves <-anova(modaves_negbin, p.uni  = "adjusted",
+                          nBoot  = 999,
+                          test   = "LR")
+print(mv_aves)
+
+mv_artr <-anova(modartr_negbin, p.uni  = "adjusted",
+                          nBoot  = 999,
+                          test   = "LR")
+print(mv_artr)
+```
+
+El análisis multivariado nos demostró que la presencia de *D. mutabilis* modifica significativamente la abundancia y la composición del ensamble de artrópodos (p = 0.001) y del ensamble de aves (p = 0.001). En los análisis univariados, la especies dominantes no respondieron significativamente entre tratamientos, lo que sugiere que estas especies generalistas mantienen su abundancia independientemente de la presencia de *D. mutabilis*. El resto de especies restantes aumentaron significativamente su asbundancia en presencia de *D. mutabilis*.
+
+Para visualizar los resultados del análisis multivariado, realizaremos un escalamiento multidimensional no métrico (NMDS), basado en distancias de Bray-Curtis, con el fin de ver las diferencias en las comunidades de artrópodos y aves entre ambos tratamientos. 
+
+```{r NMDS de artrópodos y aves}
+#Crear matriz de distancia Bray-Curtis y correr NMDS para artrópodos
+artr.mds  <- metaMDS(artr_mat, distance = "bray")
+
+# Ver el Stress del modelo
+cat("Stress Artrópodos:", artr.mds$stress, "\n")
+
+# 2. Extraer los scores de las parcelas (sitios) y asociar el factor muérdago
+artr.scores          <- as.data.frame(scores(artr.mds, display = "sites"))
+artr.scores$plot     <- datos$plot
+artr.scores$desmaria <- datos$desmaria
+
+# 3. Calcular los polígonos (Hulls) por tratamiento
+grp.sin.artr <- artr.scores[artr.scores$desmaria == "sin_desmaria", ][
+  chull(artr.scores[artr.scores$desmaria == "sin_desmaria", c("NMDS1","NMDS2")]), ]
+
+grp.con.artr <- artr.scores[artr.scores$desmaria == "con_desmaria", ][
+  chull(artr.scores[artr.scores$desmaria == "con_desmaria", c("NMDS1","NMDS2")]), ]
+
+hull.artr <- rbind(grp.sin.artr, grp.con.artr)
+
+# 4. Graficar el NDMS con ggplot
+artr.nmds.plot <- ggplot() +
+  geom_polygon(data = hull.artr,
+               aes(x = NMDS1, y = NMDS2, fill = desmaria, group = desmaria),
+               alpha = 0.25) +
+  geom_point(data = artr.scores,
+             aes(x = NMDS1, y = NMDS2, shape = desmaria, colour = desmaria),
+             size = 4) +
+  coord_equal() +
+  scale_fill_startrek() +
+  scale_color_startrek() +
+  theme_bw() +
+  labs(x = "nMDS 1", y = "nMDS 2",
+       title = "Composición de la comunidad de Artrópodos",
+       subtitle = paste("Stress:", round(artr.mds$stress, 4))) +
+  theme(axis.text.x  = element_text(size = 14),
+        axis.text.y  = element_text(size = 14),
+        axis.ticks   = element_blank(),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.background  = element_blank(),
+        legend.title = element_blank(),
+        legend.text  = element_text(size = 14))
+
+artr.nmds.plot
+
+# 1. Crear matriz de distancia Bray-Curtis y correr el NMDS para aves
+aves.mds  <- metaMDS(aves_mat, distance = "bray", trymax = 100)
+
+# Ver el Stress del modelo de aves
+cat("Stress Aves:", aves.mds$stress, "\n")
+
+# 2. Extraer los scores de las parcelas y asociar el factor muérdago
+aves.pts <- aves.mds$points
+aves.pts[,1] <- aves.pts[,1] - mean(aves.pts[,1])  # centrar NMDS1
+aves.pts[,2] <- aves.pts[,2] - mean(aves.pts[,2])  # centrar NMDS2
+aves.scores <- as.data.frame(aves.pts)
+colnames(aves.scores) <- c("NMDS1", "NMDS2")
+aves.scores$plot     <- datos$plot
+aves.scores$desmaria <- datos$desmaria
+
+# 3. Calcular los polígonos (Hulls) por tratamiento
+grp.sin.aves <- aves.scores[aves.scores$desmaria == "sin_desmaria", ][
+  chull(aves.scores[aves.scores$desmaria == "sin_desmaria", c("NMDS1","NMDS2")]), ]
+
+grp.con.aves <- aves.scores[aves.scores$desmaria == "con_desmaria", ][
+  chull(aves.scores[aves.scores$desmaria == "con_desmaria", c("NMDS1","NMDS2")]), ]
+
+hull.aves <- rbind(grp.sin.aves, grp.con.aves)
+
+# 4. Graficar el NMDS con ggplot
+aves.nmds.plot <- ggplot() +
+  geom_polygon(data = hull.aves,
+               aes(x = NMDS1, y = NMDS2, fill = desmaria, group = desmaria),
+               alpha = 0.25) +
+  geom_point(data = aves.scores,
+             aes(x = NMDS1, y = NMDS2, shape = desmaria, colour = desmaria),
+             size = 4) +
+  coord_equal() +
+  scale_fill_startrek() +
+  scale_color_startrek() +
+  theme_bw() +
+  labs(x = "nMDS 1", y = "nMDS 2",
+       title = "Composición de la comunidad de Aves",
+       subtitle = paste("Stress:", round(aves.mds$stress, 4))) +
+  theme(axis.text.x  = element_text(size = 14),
+        axis.text.y  = element_text(size = 14),
+        axis.ticks   = element_blank(),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.background  = element_blank(),
+        legend.title = element_blank(),
+        legend.text  = element_text(size = 14))
+aves.nmds.plot
+
+# Creamos el panel para ambos NMDS y lo guardamos
+panel_nmds <- (artr.nmds.plot + aves.nmds.plot) + 
+  plot_layout(guides = "collect") +           
+  plot_annotation(tag_levels = "A") & 
+  theme(legend.position = "right")             
+
+ggsave(
+  filename = "Panel_NMDS_Final.png",
+  plot = panel_nmds,
+  width = 11, height = 7, dpi = 300
+)
+```
+
+Obtuvimos valores de éstres de **0.1006** para el ensamble de artrópodos del suelo y de **0.1339** para la comunidad de aves insectívoras. Los valores de estrés situados en el rango de 0.10 a 0.20 representan ordenaciones aceptables e informativas, lo que demuestra un resultado confiable en las distancias de similitud real de nuestros datos biológicos.
+
+Podemos ver que los polígonos convexos que corresponden a las parcelas con y sin desmaria que se separan perfectamente sin presentar solapamiento. Este patrón complementa el resultado significativo obtenido en el análisis multivariado por mvabund y refuerza que la presencia de *D. mutabilis* actúa como configurador importante de la comunidad de artrópodos y aves al mostrar una composición unica en presencia de *D. mutabilis*.
+
+Ahora sabemos que hay un cambio significativo en la estructura de las comunidades de aves y artrópodos, pero aún nos falta saber si estos cambios son por un cambio en la diversidad de estas comunidades. Por esta razón, evaluaremos tres métricas claves de diversidad alfa, como la riqueza (S), el índice de Shannon (H) y la equitatividad de Pielou (J).
+
+```{r Riqueza, Shannon y equitatividad}
+# Calculando riqueza, Shannon y equitatividad para las comunidades de artrópodos
+datos$S_artr <- rowSums(artr_mat > 0)                       
+datos$H_artr <- diversity(artr_mat, index = "shannon")      
+datos$J_artr <- datos$H_artr / log(datos$S_artr)            
+datos$J_artr[datos$S_artr == 1] <- 0                        
+
+# Calculando riqueza, Shannon y equitatividad para las comunidades de aves
+datos$S_aves <- rowSums(aves_mat > 0)                       
+datos$H_aves <- diversity(aves_mat, index = "shannon")      
+datos$J_aves <- datos$H_aves / log(datos$S_aves)            
+datos$J_aves[datos$S_aves == 1] <- 0
+
+# Generamos un objeto para agrupar los todos los índices de diversidad de las comunidades de artrópodos y aves
+indices_long <- datos |>
+  select(plot, desmaria, S_artr, H_artr, J_artr, S_aves, H_aves, J_aves) |>
+  pivot_longer(
+    cols      = c(S_artr, H_artr, J_artr, S_aves, H_aves, J_aves),
+    names_to  = "indice",
+    values_to = "valor"
+  ) |>
+  mutate(
+    grupo  = if_else(str_detect(indice, "artr"), "Artrópodos", "Aves"),
+    metrica = case_when(
+      str_detect(indice, "^S") ~ "Riqueza (S)",
+      str_detect(indice, "^H") ~ "Shannon (H')",
+      str_detect(indice, "^J") ~ "Equitatividad (J)"
+    )
+  )
+# --- 1. Calcular el resumen estadístico (Media y Desviación Estándar) ---
+tabla_resumen <- indices_long |>
+  group_by(grupo, metrica, desmaria) |>
+  summarise(
+    media = mean(valor, na.rm = TRUE),
+    de    = sd(valor, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  # Formatear a texto con 3 decimales (Estándar científico: Media ± DE)
+  mutate(valor_formateado = sprintf("%.3f ± %.3f", media, de)) |>
+  # Seleccionar columnas clave y pivotar para dejar los tratamientos lado a lado
+  select(grupo, metrica, desmaria, valor_formateado) |>
+  pivot_wider(names_from = desmaria, values_from = valor_formateado) |>
+  # Ordenar para que quede Artrópodos primero y luego Aves
+  arrange(desc(grupo), metrica)
+
+# --- 2. Generar la tabla con formato académico para el informe ---
+knitr::kable(
+  tabla_resumen, 
+  col.names = c("Grupo Taxonómico", "Índice de Diversidad", "Sin Desmaria (Control)", "Con Desmaria (Tratamiento)"),
+  align = c("l", "l", "c", "c"),
+  caption = "Tabla 1. Comparación de los índices de diversidad alfa (Media ± Desviación Estándar) en comunidades de artrópodos epígeos y aves insectívoras bajo el efecto del hemiparásito *Desmaria mutabilis*."
+)
+
+```
+
+En todas las métricas, Riqueza, Shannon y Equitatividad, para ambos grupos taxonómicos podemos observar un aumento en presencia de *D. mutabilis*. Pero esto es descriptivo, aún tenemos que poner a prueba si es que la presencia de *D. mutabilis* aumenta la diversidad en artrópodos y aves, para poner a prueba esta hipótesis haremos modelos lineales generalizados (GLMs).
+
+El objetivo de este estudio es determinar si el aumento en la diversidad de artrópodos asociado a la presencia de *D. mutabilis* puede explicar un incremento en la diversidad de aves. Por tanto, realizaremos un GLM incluyendo el índice de diversidad de Shannon de aves como variable respuesta y como efectos fijos la pressencia de *D. mutabilis* y el índice de Shannon de artrópodos. Este análisis permitirá determinar si la diversidad de artrópodos explica variaciones en la diversidad de aves más allá del efecto directo asociado a la presencia del muérdago.
+
+```{r Revisando distribuciones para modelar GLMs}
+
+# El índice de Shannon es nuestra variable respuesta en los GLMs, son datos continuos y positivos, al ser una métrica calculada y acumulativa, tiende a generar errores distribuidos de manera simétrica. Teniendo esto en cuenta y el principio de Parsimonia probaremos nuestros modelos con la distribución más simple que es la Gaussiana, la cual evaluaremos posteriormente con la uniformidad y dispersión de sus residuos simulados y con la prueba de normalidad de los residuos del modelo mediante Shapiro-Wilk.
+
+glm_Hartr_gaus     <- glm(H_artr ~ desmaria,          data = datos, family = gaussian())
+glm_Haves_gaus     <- glm(H_aves ~ desmaria,          data = datos, family = gaussian())
+
+glm_mediacion_gaus <- glm(H_aves ~ H_artr + desmaria, data = datos, family = gaussian())
+
+# Diagnósticos con DHARMa
+
+sim_Hartr_gaus <- simulateResiduals(glm_Hartr_gaus, n = 1000)
+plot(sim_Hartr_gaus, main = "DHARMa — H_artr | Gaussian")
+testDispersion(sim_Hartr_gaus); testUniformity(sim_Hartr_gaus)
+
+sim_Haves_gaus <- simulateResiduals(glm_Haves_gaus, n = 1000)
+plot(sim_Haves_gaus, main = "DHARMa — H_aves | Gaussian")
+testDispersion(sim_Haves_gaus); testUniformity(sim_Haves_gaus)
+
+sim_med_gaus <- simulateResiduals(glm_mediacion_gaus, n = 1000)
+plot(sim_med_gaus, main = "DHARMa — Mediación | Gaussian")
+testDispersion(sim_med_gaus); testUniformity(sim_med_gaus)
+
+
+#  5. SHAPIRO-WILK
+cat("\n── Shapiro-Wilk sobre residuos ──\n")
+cat("H_artr  | Gaussian : p =", round(shapiro.test(residuals(glm_Hartr_gaus))$p.value,     4), "\n")
+cat("H_aves  | Gaussian : p =", round(shapiro.test(residuals(glm_Haves_gaus))$p.value,     4), "\n")
+cat("Mediac. | Gaussian : p =", round(shapiro.test(residuals(glm_mediacion_gaus))$p.value, 4), "\n")
+
+```
+
+Los diagnósticos de residuos simulados mediante DHARMa confirmaron un ajuste adecuado de las distribuciones de los tres modelos. El test de dispersión no fue significativo y los residuos simulados mostraron uniformidad sin desviaciones sistemáticas en el QQ-plot. La prueba de Shapiro-Wilk sobre los residuos confirmó el supuesto de normalidad en el modelo de artrópodos epígeos y en el de mediación. Sin embargo, en el modelo de aves insectívoras, la prueba de Shapiro-Wilk no confirmó normalidad, dado que DHARMa evalúa el ajuste global mediante una aproximación más robusta y menos sensible a desviaciones en muestra pequeñas, y que los gráficos de diagnóstico no evidenciaron patrones sistemáticos de desajuste, los resultados de este modelo se consideraron válidos para la inferencia. Los diagnósticos respaldan el uso de la distribución Gaussiana para los tres GLMs y permite proceder con el análisis.
+
+```{r GLMs y mediación}
+#Añadir diagnosticos
+
+# GLMs
+glm_H_artr <- glm(H_artr ~ desmaria, data = datos, family = gaussian)
+glm_H_aves <- glm(H_aves ~ desmaria, data = datos, family = gaussian)
+
+
+summary(glm_H_artr)
+summary(glm_H_aves)
+
+# Mediación
+glm_mediacion <- glm(H_aves ~ H_artr + desmaria, data = datos, family = gaussian)
+
+summary(glm_mediacion)
+```
+
+El muérdago actúa facilitando indirectamente a las aves. No atrae a las aves de forma directa (como muestra la falta de significancia del factor muérdago en el modelo de mediación, P = 0.47), sino que altera la estructura de la comunidad de artrópodos epígeos al aumentar la diversidad, lo que en consecuencia genera un aumento en la diversidad de aves insectívoras. 
+
+El siguiente gráfico muestra la relación entre la diversidad de artrópodos epígeos y la diversidad de aves insectívoras por parcela en presencia o ausencia de *D. mutabilis*.
+
+```{r graficando la relación diversidad artropodos-aves}
+
+mediacion_plot <-ggplot(datos, aes(H_artr, H_aves, colour = desmaria, shape = desmaria)) +
+  # Añadimos aes(group = 1) aquí para unificar la recta:
+  geom_smooth(aes(group = 1), method = "lm", se = FALSE, colour = "gray40",
+              linetype = "dashed", linewidth = 0.9) +
+  geom_point(size = 3.5, stroke = 1.2) +
+  scale_colour_manual(values = c("sin_desmaria" = "#D85A30",
+                                 "con_desmaria" = "#185FA5"),
+                      labels = c("Sin *Desmaria mutabilis*", "Con *Desmaria mutabilis*")) +
+  scale_shape_manual(values = c("sin_desmaria" = 0, "con_desmaria" = 19),
+                     labels = c("Sin *Desmaria mutabilis*", "Con *Desmaria mutabilis*")) +
+  labs(x = "Diversidad de artrópodos (H' Shannon)",
+       y = "Diversidad de aves (H' Shannon)",
+       colour = NULL, shape = NULL) +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "top", panel.grid.minor = element_blank(),
+legend.text = element_markdown() 
+  )
+mediacion_plot
+ggsave(
+  filename = "plot_de_mediacion.png",
+  plot = mediacion_plot,
+  width = 11, height = 7, dpi = 300
+)
+
+
+```
+
+El gráfico muestra visualmente el mecanismo de la cascada, las parcelas con *D. mutabilis* (color azul) se ubican en la región de lata diversidad de artrópodos epígeos y alta diversidad de aves insectívoras, mientras que las parcelas sin *D. mutabilis* (color naranjo) se concentran en la región de baja diversidad de ambos ejes. Ambos grupos siguen la misma relación lineal, lo que sugiere que la diversidad de artrópodos es el que impulsa la diversidad de aves insectívoras.
+
+Conclusiones
+
+Los análisis realizados en este documento entregan evidencia consistente con la hipótesis planteada de una cascada de facilitación multitrófica mediada por *Desmaria mutabilis* en bosques de alta montaña de Nothofagus pumilio. La presencia de *D. mutabilis* modifica significativamente la composición y diversidad de las comunidades de artrópodos epígeos. Las especies especialistas, ausentes o muy escasas sin muérdago, fueron las principales impulsoras de este cambio.La presencia de *D. mutabilis* también modificó significativamente la composición y diversidad de las aves insectívoras. Al igual que en los artrópodos, la respuesta estuvo guiada por las especies especialistas, mientras que las generalistas no respondieron.
+
+El análisis de mediación estadística determinó que el efecto de *D. mutabilis* sobre la diversidad de aves insectívoras está mediado por su efecto previo sobre la diversidad de artrópodos epígeos. Al incorporar la diversidad de artrópodos al modelo, el efecto directo del muérdago sobre las aves desapareció, mientras que el efecto del mediador se mantuvo significativo. Esto es consistente con mediación completa y con el mecanismo propuesto: el muérdago no atrae aves directamente.
+
+
+```{r session, echo=TRUE}
+sessionInfo()
+```
