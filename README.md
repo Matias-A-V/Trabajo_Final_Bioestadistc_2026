@@ -5,7 +5,7 @@
 Este repositorio contiene el código de R del análisis estadístico utilizado para el trabajo final del curso. El estudio evalúa el efecto de la presencia del muérdago (*Desmaria mutabilis*) sobre la diversidad de artrópodos epígeos y su relación de mediación sobre las comunidades de aves insectívoras.
 
 ## Estructura del Repositorio
-* `TrabajoFinalR.Rmd`: Documento RMarkdown reproducible que contiene la limpieza de datos, análisis multivariados (`mvabund`, NMDS) e inferencia.
+* `TrabajoFinalR.Rmd`: Documento RMarkdown reproducible que contiene generación de datos, la exploración de datos, análisis multivariados (`mvabund`, NMDS) e inferencia.
 
 ## Instrucciones para la Reproducción del Análisis
 Para ejecutar este código y reproducir la totalidad de las tablas y figuras del informe, siga estos pasos:
